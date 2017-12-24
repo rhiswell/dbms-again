@@ -8,21 +8,33 @@
 #include <sys/stat.h>
 
 #include <stdio.h>
+#include <string.h>
 #include <assert.h>
-#include <string>
-
-using namespace std;
 
 
-void DSMgr::InitGroup(int group_id)
+DSMgr::DSMgr() {}
+
+int DSMgr::InitGroup(int group_id)
 {
-    // Increase 8 pages in the file
-    Seek(GroupId2Pos(group_id) + (MAXBUNCH << 12) - 1, SEEK_SET);
-    fprintf(currFile, "\0");
+    int rc;
+    // Increase 8 pages for this group in the file.
+    rc = Seek(GroupId2Pos(group_id) + (MAXBUNCH << 12) - 1, SEEK_SET);
+    if (rc == -1)
+        return -1;
+    fprintf(currFile, "%c", 0);
 
     // Reset relative bitmap
-    Seek(GroupId2Pos(group_id), SEEK_SET);
-    fprintf(currFile, "\0");
+    rc = Seek(GroupId2Pos(group_id), SEEK_SET);
+    if (rc == -1)
+        return -1;
+    fprintf(currFile, "%c", 0x01); // 00000001
+
+    return 0;
+}
+
+int DSMgr::GetNRGroups()
+{
+    return (numPages >> 15) + 1;    // <=> numPages / (4096 * 8) pages per group
 }
 
 // The backing file is organized in pages that each is 4KB.
@@ -30,41 +42,34 @@ void DSMgr::InitGroup(int group_id)
 // |----------------------|-----------|-----------|----
 // |--page #0 for bitmap--|--page #1--|--page #2--|...
 // |----------------------|-----------|-----------|----
-// A 4K page can take 32768bits, then a group has 32768 pages.
+// A 4K page can take 32768 bits, then a group has 32768 pages.
 // So, we can get capacity up to 128MB a group.
-int DSMgr::OpenFile(string filename)
+int DSMgr::OpenFile(const char *pathname)
 {
     // First open to check if the file exists
-    currFile = fopen(filename.c_str(), "r");
+    currFile = fopen(pathname, "r+");
     if (currFile == NULL) {
         // The file doesn't exist => create a file & init 1st page (partly) for bitmap
-
-        if (currFile == NULL)
+        currFile = fopen(pathname, "w+");
+        if (currFile == NULL || InitGroup(0) == -1)
             return -1;
-        InitGroup(0);
     }
+
     // Stat the file to init numPages
     struct stat sb;
-    int rc = stat(filename.c_str(), &sb);
+    int rc = stat(pathname, &sb);
     if (rc != 0)
         return -1;
     numPages = (sb.st_size >> 12);  // <=> sb.st_size / 4K
-    assert(numPages == MAXBUNCH);
+    assert((numPages % MAXBUNCH == 0) && (numPages >= MAXBUNCH));
 
-    // Load bitmaps from each group
-    int nr_groups = GetNRGroups();  // TODO
-    Seek(0, SEEK_SET);
-    fread(pages, sizeof(char), HEADROOM, currFile);
-    numPages = 0;
-    for (int i = 0; i < HEADROOM; i++) {
-        if (pages[i] & 0x00000001) numPages++;
-        if (pages[i] & 0x00000010) numPages++;
-        if (pages[i] & 0x00000100) numPages++;
-        if (pages[i] & 0x00001000) numPages++;
-        if (pages[i] & 0x00010000) numPages++;
-        if (pages[i] & 0x00100000) numPages++;
-        if (pages[i] & 0x01000000) numPages++;
-        if (pages[i] & 0x10000000) numPages++;
+    // Load bitmaps from each allocated group
+    int nr_groups = GetNRGroups();
+    assert(nr_groups >= 0 && nr_groups <= MAXGROUP);
+    for (int gi = 0; gi < nr_groups; gi++) {
+        if (Seek(GroupId2Pos(gi), SEEK_SET) == -1)
+            return -1;
+        fread(bitmap + (gi << 12), sizeof(char), PAGESIZE, currFile);
     }
 
     return 0;
@@ -72,29 +77,36 @@ int DSMgr::OpenFile(string filename)
 
 int DSMgr::CloseFile()
 {
-    if (currFile != NULL)
-        fclose(currFile);
+    // Flush in-memory meta data (e.g. bitmap) into file buffer
+    for (int gi = 0; gi < GetNRGroups(); gi++) {
+        if (Seek(GroupId2Pos(gi), SEEK_SET) == -1)
+            return -1;
+        fwrite(bitmap + (gi << 12), sizeof(char), PAGESIZE, currFile);
+    }
+
+    fclose(currFile);
     return 0;
 }
 
 int DSMgr::ReadPage(int page_id, bFrame *frm)
 {
     if (frm == NULL || Seek(PageId2Pos(page_id), SEEK_SET) == -1)
-        return 0;
-    return fread(frm, sizeof(*frm), 1, GetFile());
+        return -1;
+    int nread = fread(frm->field, 1, sizeof(*frm), currFile);
+    return (nread == PAGESIZE) ? 0 : -1;
 }
 
 int DSMgr::WritePage(int page_id, bFrame *frm)
 {
     if (frm == NULL || Seek(PageId2Pos(page_id), SEEK_SET) == -1)
-        return 0;
-    return fwrite(frm, sizeof(*frm), 1, GetFile());
+        return -1;
+    int nwrite = fwrite(frm->field, 1, sizeof(*frm), currFile);
+    return (nwrite == PAGESIZE) ? 0 : -1;
 }
 
 int DSMgr::Seek(int offset, int pos)
 {
-    // TODO: check offset & pos
-    return fseek(GetFile(), offset, pos);
+    return fseek(currFile, offset, pos);
 }
 
 FILE * DSMgr::GetFile()
@@ -104,7 +116,26 @@ FILE * DSMgr::GetFile()
 
 void DSMgr::IncNumPages()
 {
-    // Do nothing
+    // Allocate pages in bunch
+    int new_nr_pages = numPages + MAXBUNCH;
+    assert(new_nr_pages <= MAXPAGES);
+
+    if (new_nr_pages % (PAGESIZE << 3) == MAXBUNCH) {
+        // Routine to create a new group
+        int group_id = PageId2GroupId(new_nr_pages-1);
+        InitGroup(group_id);
+        // Load bitmap into memory
+        Seek(GroupId2Pos(group_id), SEEK_SET);
+        fread(bitmap + (group_id << 12), sizeof(char), PAGESIZE, currFile);
+    } else {
+        // Create bunch of pages in a group
+        Seek(PageId2Pos(new_nr_pages)-1, SEEK_SET);
+        fprintf(currFile, "%c", 0);
+        int bm_idx = numPages >> 3; // Bitmap idx of next bunch of pages
+        memset(&bitmap[bm_idx], 0, MAXBUNCH);
+    }
+
+    numPages = new_nr_pages;
 }
 
 int DSMgr::GetNumPages()
@@ -112,14 +143,39 @@ int DSMgr::GetNumPages()
     return numPages;
 }
 
+int DSMgr::FindOnePage()
+{
+    int bm_idx, page_id;
+    for (bm_idx = 0, page_id = 0; page_id < numPages;
+         bm_idx++, page_id += 8) {
+        if (bitmap[bm_idx] == 0xff)
+            continue;
+        for (int off = 0; off < 8; off++) {
+            if ((bitmap[bm_idx] & (1 << off)) == 0) {
+                page_id += off;
+                SetUse(page_id, 1);
+                goto out;
+            }
+        }
+    }
+
+    // Allocate a bunch of new pages
+    IncNumPages();
+    // Do find again
+    FindOnePage();
+
+out:
+    return page_id;
+}
+
 void DSMgr::SetUse(int page_id, int use_bit)
 {
     int idx = page_id / 8;
     int off = page_id % 8;
     if (use_bit == 1) {
-        pages[idx] |= (1 << off);
+        bitmap[idx] |= (1 << off);
     } else if (use_bit == 0) {
-        pages[idx] &= ~(1 << off);
+        bitmap[idx] &= ~(1 << off);
     } else {
         // `use_bit` is out of range, then do nothing
     }
@@ -129,5 +185,5 @@ int DSMgr::GetUse(int page_id)
 {
     int idx = page_id / 8;
     int off = page_id % 8;
-    return pages[idx] & (1 << off);
+    return bitmap[idx] & (1 << off);
 }
