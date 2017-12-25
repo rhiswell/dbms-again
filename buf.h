@@ -5,24 +5,24 @@
 #ifndef DBMS_AGAIN_BUF_H
 #define DBMS_AGAIN_BUF_H
 
-#define FRAMESIZE   4096
 #define MAXFRAMES   1024
 
-struct bFrame
-{
-    char field[FRAMESIZE];
-};
+#include <list>
+#include <utility>
+#include "bd.h"
+#include "types.h"
 
-extern bFrame buf[MAXFRAMES];
+using std::list;
+using std::pair;
 
 struct BCB
 {
-    BCB();
     int page_id;
     int frame_id;
     int latch;
     int count;
     int dirty;
+    int isocc;
     BCB *next;
 };
 
@@ -33,13 +33,13 @@ public:
     BMgr();
     // Interface functions
     int FixPage(int page_id, int prot);
-    void NewPage();
+    pair<int, int> FixNewPage();    // (page_id, frame_id)
     int UnfixPage(int page_id);
     int NumFreeFrames();
 
 private:
-    int ftop[MAXFRAMES];
-    BCB *ptof[MAXFRAMES]; // Hash table
+    BCB *ptof[MAXFRAMES];   // Hash table
+    list<int> lru;          // Front is LRU & back is MRU
 
     int SelectVictim();
     int Hash(int page_id);
