@@ -57,7 +57,7 @@ int BMgr::FixPage(int page_id, int prot)
         lru.push_back(curr_bcb->frame_id);
 
         rv = curr_bcb->frame_id;
-        goto out;
+        return rv;
     }
 
     // Load page and then fix it
@@ -99,6 +99,7 @@ int BMgr::FixPage(int page_id, int prot)
         curr_bcb->next = bcb_ent->next;
         bcb_ent = curr_bcb;
     }
+    ptof[htab_idx] = bcb_ent;
 
     // Move into MRU
     RemoveLRUEle(frame_id);
@@ -164,11 +165,11 @@ int BMgr::SelectVictim()
                 goto out;
             }
             UnsetDirty(curr_bcb->frame_id);
-            // #1: Remove BCB from `ptof` hash table
-            RemoveBCB(curr_bcb, curr_bcb->page_id);
-            rv = curr_bcb->frame_id;
-            goto out;
         }
+        // #1: Remove BCB from `ptof` hash table
+        RemoveBCB(curr_bcb, curr_bcb->page_id);
+        rv = curr_bcb->frame_id;
+        goto out;
     }
 
 out:
