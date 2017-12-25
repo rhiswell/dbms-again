@@ -148,7 +148,7 @@ int DSMgr::FindOnePage()
     int bm_idx, page_id;
     for (bm_idx = 0, page_id = 0; page_id < numPages;
          bm_idx++, page_id += 8) {
-        if (bitmap[bm_idx] == 0xff)
+        if ((bitmap[bm_idx] & 0xff) == 0xff)
             continue;
         for (int off = 0; off < 8; off++) {
             if ((bitmap[bm_idx] & (1 << off)) == 0) {
