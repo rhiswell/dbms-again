@@ -49,6 +49,8 @@ int BMgr::FixPage(int page_id, int prot)
             continue;
 
         curr_bcb->count++;
+        if (curr_bcb->latch == 0)
+            curr_bcb->latch++;
         assert(curr_bcb->latch == 1);
         assert(curr_bcb->isocc == 1);
 
@@ -145,6 +147,16 @@ int BMgr::NumFreeFrames()
     return cnt;
 }
 
+void BMgr::TriggerWrite(int frame_id)
+{
+    SetDirty(frame_id);
+}
+
+void BMgr::TriggerRead(int frame_id)
+{
+    // Do nothing
+}
+
 int BMgr::SelectVictim()
 {
     int rv = -1;
@@ -158,7 +170,7 @@ int BMgr::SelectVictim()
             // #0: Flush page buffer into backing disk
             int rc = ds_mgr.WritePage(
                     curr_bcb->page_id, &buf[curr_bcb->frame_id]);
-            if (rc != -1) {
+            if (rc == -1) {
                 fprintf(stderr, "Error: failed to write page %d: frame %d\n",
                         curr_bcb->page_id, curr_bcb->frame_id);
                 rv = -1;

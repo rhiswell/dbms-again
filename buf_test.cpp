@@ -8,7 +8,8 @@
 
 using std::pair;
 
-DSMgr ds_mgr;
+// DSMgr ds_mgr;
+extern DSMgr ds_mgr;
 
 const char *test_buf_dbf= "test_buf.dbf";
 

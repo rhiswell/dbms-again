@@ -12,6 +12,10 @@
 #include <assert.h>
 
 
+// Non-thread safety
+int rw_counter_r = 0;
+int rw_counter_w = 0;
+
 DSMgr::DSMgr() {}
 
 int DSMgr::InitGroup(int group_id)
@@ -93,6 +97,7 @@ int DSMgr::ReadPage(int page_id, bFrame *frm)
     if (frm == NULL || Seek(PageId2Pos(page_id), SEEK_SET) == -1)
         return -1;
     int nread = fread(frm->field, 1, sizeof(*frm), currFile);
+    rw_counter_r++;
     return (nread == PAGESIZE) ? 0 : -1;
 }
 
@@ -101,6 +106,7 @@ int DSMgr::WritePage(int page_id, bFrame *frm)
     if (frm == NULL || Seek(PageId2Pos(page_id), SEEK_SET) == -1)
         return -1;
     int nwrite = fwrite(frm->field, 1, sizeof(*frm), currFile);
+    rw_counter_w++;
     return (nwrite == PAGESIZE) ? 0 : -1;
 }
 

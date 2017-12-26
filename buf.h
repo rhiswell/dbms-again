@@ -36,6 +36,9 @@ public:
     pair<int, int> FixNewPage();    // (page_id, frame_id)
     int UnfixPage(int page_id);
     int NumFreeFrames();
+    // Trace use only
+    void TriggerWrite(int frame_id);
+    void TriggerRead(int frame_id);
 
 private:
     BCB *ptof[MAXFRAMES];   // Hash table
